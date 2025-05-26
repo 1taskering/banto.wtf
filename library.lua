@@ -29,12 +29,12 @@ local Library = {
 
     HudRegistry = {};
 
-    FontColor = Color3.fromRGB(180, 210, 180); -- Subtle green-tinted off-white for text readability
-    MainColor = Color3.fromRGB(20, 40, 20); -- Deep, dark green for primary elements
-    BackgroundColor = Color3.fromRGB(10, 25, 10); -- Near-black green for a dark background
-    AccentColor = Color3.fromRGB(30, 160, 30); -- Rich emerald green for accents
-    OutlineColor = Color3.fromRGB(40, 60, 40); -- Dark muted green for outlines
-    RiskColor = Color3.fromRGB(170, 30, 30); -- Darker red for risk to fit the theme
+    FontColor = Color3.fromRGB(190, 220, 190) -- Slightly brighter green-tinted off-white for text readability
+    MainColor = Color3.fromRGB(15, 35, 15) -- Darker green for primary elements, maintaining depth
+    BackgroundColor = Color3.fromRGB(0, 0, 0) -- Pure black for a stark, dark background
+    AccentColor = Color3.fromRGB(40, 180, 40) -- Vibrant emerald green for stronger accent highlights
+    OutlineColor = Color3.fromRGB(30, 50, 30) -- Darker muted green for outlines, slightly adjusted for contrast
+    RiskColor = Color3.fromRGB(160, 20, 20) -- Slightly deeper red for risk, keeping it visible against black
 
     Black = Color3.new(0, 0, 0);
     Font = Enum.Font.Code,
