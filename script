@@ -1,0 +1,1205 @@
+local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
+
+local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
+local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+
+-- Silent Aim configuration
+getgenv().salvia_dev = {
+    Enabled = false,
+    HitPartMode = "Specific",
+    HitPart = "HumanoidRootPart",
+    HealthCheck = false,
+    KnifeCheck = false,
+    HitChance = 100,
+    Prediction = {
+        Enabled = false,
+        X = 0,
+        Y = 0
+    },
+    FOV = {
+        Visible = false,
+        Radius = 100,
+        OutlineColor = Color3.fromRGB(255, 255, 255),
+        Thickness = 1,
+        Transparency = 1
+    },
+    _metatableHooked = false
+}
+
+-- Camlock configuration
+local CONFIG = {
+    Enabled = false,
+    LockKey = Enum.KeyCode.Q,
+    SmoothingFactor = 1,
+    PredictionFactorX = 0,
+    PredictionFactorY = 0,
+    DefaultHitPart = "HumanoidRootPart"
+}
+
+-- ESP configuration
+local default = {
+    ["2dbox"] = { color = Color3.fromRGB(255, 255, 255), enable = false },
+    ["name"] = { enable = false, placement = "Top" },
+    ["skeleton"] = { 
+        enable = false, 
+        color = Color3.new(1, 1, 1), 
+        outlineEnabled = true, 
+        outlineColor = Color3.new(0, 0, 0), 
+        lineThickness = 1, 
+        outlineThickness = 3 
+    },
+    ["highlight"] = { 
+        enable = false, 
+        fillColor = Color3.fromRGB(128, 128, 128), 
+        outlineColor = Color3.fromRGB(0, 0, 0), 
+        fillTransparency = 0.5, 
+        outlineTransparency = 0 
+    }
+}
+
+-- Cleanup previous Silent Aim setup
+if getgenv().salvia_dev and getgenv().salvia_dev._cleanup then
+    getgenv().salvia_dev._cleanup()
+end
+
+-- Silent Aim: Initialize FOV circle
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Color = salvia_dev.FOV.OutlineColor
+FOVCircle.Thickness = salvia_dev.FOV.Thickness
+FOVCircle.Transparency = salvia_dev.FOV.Transparency
+FOVCircle.Radius = salvia_dev.FOV.Radius
+
+local silentAimRenderConnection
+local silentAimOriginalIndex
+local camlockInputConnection
+local camlockRenderConnection
+local walkspeedConnection
+local jumpPowerConnection
+local rapidFireInputBeganConnection
+local rapidFireInputEndedConnection
+
+-- Silent Aim: Cleanup function
+local function silentAimCleanup()
+    if silentAimRenderConnection then
+        silentAimRenderConnection:Disconnect()
+        silentAimRenderConnection = nil
+    end
+    if FOVCircle then
+        FOVCircle:Remove()
+        FOVCircle = nil
+    end
+    if silentAimOriginalIndex and getgenv().salvia_dev._metatableHooked then
+        local success, grm = pcall(getrawmetatable, game)
+        if success and grm and setreadonly then
+            setreadonly(grm, false)
+            grm.__index = silentAimOriginalIndex
+            setreadonly(grm, true)
+            getgenv().salvia_dev._metatableHooked = false
+        end
+    end
+end
+getgenv().salvia_dev._cleanup = silentAimCleanup
+
+-- Camlock: Cleanup function
+local function camlockCleanup()
+    if camlockInputConnection then
+        camlockInputConnection:Disconnect()
+        camlockInputConnection = nil
+    end
+    if camlockRenderConnection then
+        camlockRenderConnection:Disconnect()
+        camlockRenderConnection = nil
+    end
+end
+
+-- Movement: Cleanup function
+local function movementCleanup()
+    if walkspeedConnection then
+        walkspeedConnection:Disconnect()
+        walkspeedConnection = nil
+    end
+    if jumpPowerConnection then
+        jumpPowerConnection:Disconnect()
+        jumpPowerConnection = nil
+    end
+end
+
+-- Misc: Cleanup function
+local function miscCleanup()
+    if rapidFireInputBeganConnection then
+        rapidFireInputBeganConnection:Disconnect()
+        rapidFireInputBeganConnection = nil
+    end
+    if rapidFireInputEndedConnection then
+        rapidFireInputEndedConnection:Disconnect()
+        rapidFireInputEndedConnection = nil
+    end
+end
+
+-- Combined cleanup for unload
+local function fullCleanup()
+    silentAimCleanup()
+    camlockCleanup()
+    movementCleanup()
+    miscCleanup()
+end
+
+-- Silent Aim: Functions
+local function IsHoldingKnife()
+    if not salvia_dev.KnifeCheck then
+        return false
+    end
+    local Character = LocalPlayer.Character
+    if Character then
+        local Tool = Character:FindFirstChildOfClass("Tool")
+        return Tool and Tool.Name == "Knife"
+    end
+    return false
+end
+
+local function GetClosestPart(Character, MousePosition)
+    local ClosestDistance, ClosestPart = math.huge, nil
+    local Parts = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "UpperTorso"}
+    for _, PartName in ipairs(Parts) do
+        local Part = Character:FindFirstChild(PartName)
+        if Part then
+            local ScreenPosition, Visible = Camera:WorldToViewportPoint(Part.Position)
+            if Visible then
+                local Distance = (MousePosition - Vector2.new(ScreenPosition.X, ScreenPosition.Y)).Magnitude
+                if Distance < ClosestDistance then
+                    ClosestDistance, ClosestPart = Distance, Part
+                end
+            end
+        end
+    end
+    return ClosestPart
+end
+
+local function GetRandomPart(Character)
+    local Parts = {"Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "UpperTorso"}
+    local ValidParts = {}
+    for _, PartName in ipairs(Parts) do
+        local Part = Character:FindFirstChild(PartName)
+        if Part then
+            table.insert(ValidParts, Part)
+        end
+    end
+    if #ValidParts > 0 then
+        return ValidParts[math.random(1, #ValidParts)]
+    end
+    return nil
+end
+
+local function GetClosestPlayer()
+    local ClosestDistance, ClosestPart = math.huge, nil
+    local MousePosition = UserInputService:GetMouseLocation()
+    for _, Player in next, Players:GetPlayers() do
+        if Player ~= LocalPlayer and Player.Character then
+            local Character = Player.Character
+            local Humanoid = Character:FindFirstChild("Humanoid")
+            if Humanoid and (not salvia_dev.HealthCheck or Humanoid.Health > 0) then
+                local TargetPart
+                if salvia_dev.HitPartMode == "Closest" then
+                    TargetPart = GetClosestPart(Character, MousePosition)
+                elseif salvia_dev.HitPartMode == "Random" then
+                    TargetPart = GetRandomPart(Character)
+                else
+                    TargetPart = Character:FindFirstChild(salvia_dev.HitPart) or Character:FindFirstChild("Torso") or Character:FindFirstChild("UpperTorso")
+                end
+                if TargetPart then
+                    local ScreenPosition, Visible = Camera:WorldToViewportPoint(TargetPart.Position)
+                    if Visible then
+                        local Distance = (MousePosition - Vector2.new(ScreenPosition.X, ScreenPosition.Y)).Magnitude
+                        if Distance <= salvia_dev.FOV.Radius and Distance < ClosestDistance then
+                            ClosestDistance, ClosestPart = Distance, TargetPart
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return ClosestPart
+end
+
+local function ApplyPrediction(TargetPart, PredictionSettings)
+    if not PredictionSettings.Enabled then
+        return TargetPart.Position
+    end
+    local Velocity = TargetPart.Velocity
+    local PredictedPosition = TargetPart.Position + Vector3.new(
+        Velocity.X * PredictionSettings.X,
+        Velocity.Y * PredictionSettings.Y,
+        Velocity.Z * PredictionSettings.X
+    )
+    return PredictedPosition
+end
+
+local function CheckHitChance()
+    return math.random(1, 100) <= salvia_dev.HitChance
+end
+
+-- Silent Aim: Metatable hooking
+local success, grm = pcall(getrawmetatable, game)
+if success and grm and grm.__index and setreadonly then
+    silentAimOriginalIndex = grm.__index
+    setreadonly(grm, false)
+    grm.__index = function(self, k)
+        if not checkcaller() and self == LocalPlayer:GetMouse() and salvia_dev.Enabled and not IsHoldingKnife() then
+            if (k == "Hit" or k == "Target") and CheckHitChance() then
+                local TargetPart = GetClosestPlayer()
+                if TargetPart then
+                    local Position = salvia_dev.Prediction.Enabled and ApplyPrediction(TargetPart, salvia_dev.Prediction) or TargetPart.Position
+                    return CFrame.new(Position)
+                end
+            end
+        end
+        return silentAimOriginalIndex(self, k)
+    end
+    getgenv().salvia_dev._metatableHooked = true
+else
+    warn("[salvia.dev] Metatable hooking not supported on this executor. Silent Aim disabled.")
+end
+
+-- Silent Aim: RenderStepped for FOV circle
+silentAimRenderConnection = RunService.RenderStepped:Connect(function()
+    if salvia_dev.Enabled then
+        FOVCircle.Visible = salvia_dev.FOV.Visible
+        FOVCircle.Position = UserInputService:GetMouseLocation()
+        FOVCircle.Radius = salvia_dev.FOV.Radius
+        FOVCircle.Color = salvia_dev.FOV.OutlineColor
+        FOVCircle.Transparency = salvia_dev.FOV.Transparency
+    else
+        FOVCircle.Visible = false
+    end
+end)
+
+-- Camlock Logic
+local lockOn = false
+local targetPlayer = nil
+local hitPartName = CONFIG.DefaultHitPart
+
+local function findClosestPlayerToMouse()
+    local closestPlayer = nil
+    local closestDistance = math.huge
+    local mousePos = UserInputService:GetMouseLocation()
+
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= LocalPlayer and otherPlayer.Character and otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local targetPart = otherPlayer.Character:FindFirstChild(hitPartName)
+            if targetPart then
+                local screenPos, onScreen = Camera:WorldToScreenPoint(targetPart.Position)
+                if onScreen then
+                    local screenPos2D = Vector2.new(screenPos.X, screenPos.Y)
+                    local distance = (screenPos2D - mousePos).Magnitude
+                    if distance < closestDistance then
+                        closestDistance = distance
+                        closestPlayer = otherPlayer
+                    end
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+local function predictPosition(target, hitPart)
+    if not target or not target.Character or not target.Character:FindFirstChild(hitPart) then return nil end
+    local part = target.Character[hitPart]
+    local velocity = target.Character.HumanoidRootPart.Velocity
+    local currentPos = part.Position
+    local predictedPos = currentPos + Vector3.new(
+        velocity.X * CONFIG.PredictionFactorX,
+        velocity.Y * CONFIG.PredictionFactorY,
+        velocity.Z * CONFIG.PredictionFactorX
+    )
+    return predictedPos
+end
+
+local function SetupCamlockInput()
+    if camlockInputConnection then
+        camlockInputConnection:Disconnect()
+        camlockInputConnection = nil
+    end
+
+    camlockInputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or not CONFIG.Enabled then return end
+        if input.KeyCode == CONFIG.LockKey then
+            lockOn = not lockOn
+            if lockOn then
+                targetPlayer = findClosestPlayerToMouse()
+                if targetPlayer then
+                    print("Locked onto: " .. targetPlayer.Name)
+                else
+                    lockOn = false
+                    print("No valid target found near mouse")
+                end
+            else
+                targetPlayer = nil
+                print("Lock-on disabled")
+            end
+        end
+    end)
+    print("[Camlock] Input listener set up for key:", CONFIG.LockKey.Name)
+end
+
+SetupCamlockInput()
+
+camlockRenderConnection = RunService.RenderStepped:Connect(function(deltaTime)
+    if lockOn and targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild(hitPartName) and CONFIG.Enabled then
+        local predictedPos = predictPosition(targetPlayer, hitPartName)
+        if predictedPos then
+            local currentCFrame = Camera.CFrame
+            local targetCFrame = CFrame.new(currentCFrame.Position, predictedPos)
+            Camera.CFrame = currentCFrame:Lerp(targetCFrame, CONFIG.SmoothingFactor)
+        else
+            lockOn = false
+            targetPlayer = nil
+        end
+    end
+end)
+
+-- ESP Logic
+local HeadOff = Vector3.new(0, 0.5, 0)
+local LegOff = Vector3.new(0, 3, 0)
+local boxScaleFactor = 1.2
+
+local boxCache = {}
+local stackingInfo = {}
+local playerESP = {}
+local lines = {}
+local outlines = {}
+
+local function getDistanceFromCamera(part)
+    return (part.Position - Camera.CFrame.Position).Magnitude
+end
+
+local function getPosition(placement, boxPos, boxSize, userId, elementType)
+    if not stackingInfo[userId] then
+        stackingInfo[userId] = {
+            Top = { count = 0, elements = {} },
+            Bottom = { count = 0, elements = {} },
+            Left = { count = 0, elements = {} },
+            Right = { count = 0, elements = {} }
+        }
+    end
+    if not stackingInfo[userId][placement].elements[elementType] then
+        stackingInfo[userId][placement].count = stackingInfo[userId][placement].count + 1
+        stackingInfo[userId][placement].elements[elementType] = stackingInfo[userId][placement].count
+    end
+    local stackPosition = stackingInfo[userId][placement].elements[elementType]
+    local stackOffset = (stackPosition - 1) * 15
+    if placement == "Top" then
+        return Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y - 20 - stackOffset), true
+    elseif placement == "Bottom" then
+        return Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y + boxSize.Y + 10 + stackOffset), true
+    elseif placement == "Left" then
+        return Vector2.new(boxPos.X - 10, boxPos.Y + boxSize.Y / 2 + stackOffset), false
+    elseif placement == "Right" then
+        return Vector2.new(boxPos.X + boxSize.X + 10, boxPos.Y + boxSize.Y / 2 + stackOffset), false
+    else
+        return Vector2.new(boxPos.X + boxSize.X / 2, boxPos.Y - 20), true
+    end
+end
+
+local function resetStackingInfo(userId)
+    stackingInfo[userId] = nil
+end
+
+local function esp(p, cr)
+    local h = cr:WaitForChild("Humanoid")
+    local head = cr:WaitForChild("Head")
+    local nameText = Drawing.new("Text")
+    nameText.Visible = false
+    nameText.Outline = true
+    nameText.Font = 3
+    nameText.Color = Color3.fromRGB(255, 255, 255)
+    nameText.Size = 26
+
+    local c1, c2, c3
+    local function disconnect()
+        nameText.Visible = false
+        nameText:Remove()
+        resetStackingInfo(p.UserId)
+        if c1 then c1:Disconnect() end
+        if c2 then c2:Disconnect() end
+        if c3 then c3:Disconnect() end
+    end
+
+    c2 = cr.AncestryChanged:Connect(function(_, parent)
+        if not parent then disconnect() end
+    end)
+    c3 = h.HealthChanged:Connect(function(v)
+        if v <= 0 or h:GetState() == Enum.HumanoidStateType.Dead then disconnect() end
+    end)
+    c1 = RunService.RenderStepped:Connect(function()
+        if not boxCache[p.UserId] then return end
+        local boxPos = boxCache[p.UserId].Box.Position
+        local boxSize = boxCache[p.UserId].Box.Size
+        if boxCache[p.UserId].Box.Visible then
+            local pos, centered = getPosition(default.name.placement, boxPos, boxSize, p.UserId, "name")
+            nameText.Position = pos
+            nameText.Center = centered
+            nameText.Text = p.Name
+            nameText.Visible = default.name.enable
+        else
+            nameText.Visible = false
+        end
+    end)
+end
+
+local function updateBoxESP(v)
+    if not boxCache[v.UserId] then
+        boxCache[v.UserId] = {
+            BoxOutline = Drawing.new("Square"),
+            Box = Drawing.new("Square")
+        }
+        local BoxOutline = boxCache[v.UserId].BoxOutline
+        BoxOutline.Visible = false
+        BoxOutline.Color = Color3.new(0, 0, 0)
+        BoxOutline.Thickness = 3
+        BoxOutline.Transparency = 1
+        BoxOutline.Filled = false
+        local Box = boxCache[v.UserId].Box
+        Box.Visible = false
+        Box.Color = default["2dbox"].color
+        Box.Thickness = 1
+        Box.Transparency = 1
+        Box.Filled = false
+    end
+
+    local connection
+    connection = RunService.RenderStepped:Connect(function()
+        if not v or not v.Character or 
+           not v.Character:FindFirstChild("Humanoid") or 
+           not v.Character:FindFirstChild("HumanoidRootPart") or 
+           v.Character.Humanoid.Health <= 0 then
+            if boxCache[v.UserId] then
+                boxCache[v.UserId].BoxOutline.Visible = false
+                boxCache[v.UserId].Box.Visible = false
+            end
+            if connection then
+                connection:Disconnect()
+            end
+            return
+        end
+
+        local hrp = v.Character.HumanoidRootPart
+        local head = v.Character:FindFirstChild("Head")
+        if head then
+            local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position + HeadOff)
+            local footPos, footOnScreen = Camera:WorldToViewportPoint(hrp.Position - LegOff)
+            local hrpPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+            if headOnScreen and footOnScreen and onScreen then
+                local scaleFactor = 1000 / hrpPos.Z
+                local width = hrp.Size.X * scaleFactor * boxScaleFactor * 1.1 * 1.2
+                local height = (headPos.Y - footPos.Y) * 1.1
+                local centerX = hrpPos.X
+                local centerY = (headPos.Y + footPos.Y) / 2
+                local BoxOutline = boxCache[v.UserId].BoxOutline
+                local Box = boxCache[v.UserId].Box
+                BoxOutline.Size = Vector2.new(width, height)
+                BoxOutline.Position = Vector2.new(centerX - width / 2, centerY - height / 2)
+                BoxOutline.Visible = default["2dbox"].enable
+                Box.Size = Vector2.new(width, height)
+                Box.Position = Vector2.new(centerX - width / 2, centerY - height / 2)
+                Box.Visible = default["2dbox"].enable
+                Box.Color = default["2dbox"].color
+            else
+                boxCache[v.UserId].BoxOutline.Visible = false
+                boxCache[v.UserId].Box.Visible = false
+            end
+        end
+    end)
+end
+
+local function createHighlight(player)
+    if not playerESP[player] then
+        playerESP[player] = {}
+    end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = default.highlight.fillColor
+    highlight.OutlineColor = default.highlight.outlineColor
+    highlight.FillTransparency = default.highlight.fillTransparency
+    highlight.OutlineTransparency = default.highlight.outlineTransparency
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Enabled = default.highlight.enable
+
+    playerESP[player].Highlight = highlight
+    return highlight
+end
+
+local function updateHighlightESP(player)
+    if not playerESP[player] or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+
+    local character = player.Character
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChild("Humanoid")
+
+    if not humanoidRootPart or not humanoid then
+        return
+    end
+
+    if playerESP[player].Highlight then
+        if not playerESP[player].Highlight.Parent then
+            playerESP[player].Highlight.Parent = character
+        end
+
+        playerESP[player].Highlight.Enabled = default.highlight.enable
+        playerESP[player].Highlight.FillColor = default.highlight.fillColor
+        playerESP[player].Highlight.OutlineColor = default.highlight.outlineColor
+        playerESP[player].Highlight.FillTransparency = default.highlight.fillTransparency
+        playerESP[player].Highlight.OutlineTransparency = default.highlight.outlineTransparency
+    end
+end
+
+local R6_CONNECTIONS = {
+    {"Head", "Torso"},
+    {"Torso", "Left Arm"},
+    {"Torso", "Right Arm"},
+    {"Torso", "Left Leg"},
+    {"Torso", "Right Leg"}
+}
+
+local R15_CONNECTIONS = {
+    {"Head", "UpperTorso"},
+    {"UpperTorso", "LowerTorso"},
+    {"UpperTorso", "LeftUpperArm"},
+    {"UpperTorso", "RightUpperArm"},
+    {"LeftUpperArm", "LeftLowerArm"},
+    {"LeftLowerArm", "LeftHand"},
+    {"RightUpperArm", "RightLowerArm"},
+    {"RightLowerArm", "RightHand"},
+    {"LowerTorso", "LeftUpperLeg"},
+    {"LowerTorso", "RightUpperLeg"},
+    {"LeftUpperLeg", "LeftLowerLeg"},
+    {"LeftLowerLeg", "LeftFoot"},
+    {"RightUpperLeg", "RightLowerLeg"},
+    {"RightLowerLeg", "RightFoot"}
+}
+
+local function worldToScreen(part)
+    local position, onScreen = Camera:WorldToViewportPoint(part.Position)
+    return Vector2.new(position.X, position.Y), onScreen
+end
+
+local function getCharacterRig(character)
+    return character:FindFirstChild("Torso") and "R6" or "R15"
+end
+
+local function clearLines()
+    for _, line in ipairs(lines) do
+        line:Remove()
+    end
+    for _, outline in ipairs(outlines) do
+        outline:Remove()
+    end
+    lines = {}
+    outlines = {}
+end
+
+local function drawSkeleton()
+    clearLines()
+
+    if not default.skeleton.enable then return end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local character = player.Character
+
+            if character then
+                local humanoid = character:FindFirstChild("Humanoid")
+                local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+                if humanoid and rootPart and humanoid.Health > 0 then
+                    local connections = getCharacterRig(character) == "R6" and R6_CONNECTIONS or R15_CONNECTIONS
+
+                    for _, connection in ipairs(connections) do
+                        local fromPart = character:FindFirstChild(connection[1])
+                        local toPart = character:FindFirstChild(connection[2])
+
+                        if fromPart and toPart then
+                            local fromScreen, fromVisible = worldToScreen(fromPart)
+                            local toScreen, toVisible = worldToScreen(toPart)
+
+                            if fromVisible and toVisible then
+                                if default.skeleton.outlineEnabled then
+                                    local outline = Drawing.new("Line")
+                                    outline.From = fromScreen
+                                    outline.To = toScreen
+                                    outline.Color = default.skeleton.outlineColor
+                                    outline.Thickness = default.skeleton.outlineThickness
+                                    outline.Visible = true
+                                    table.insert(outlines, outline)
+                                end
+
+                                local line = Drawing.new("Line")
+                                line.From = fromScreen
+                                line.To = toScreen
+                                line.Color = default.skeleton.color
+                                line.Thickness = default.skeleton.lineThickness
+                                line.Visible = true
+                                table.insert(lines, line)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function playerRemoved(player)
+    if playerESP[player] then
+        if playerESP[player].Highlight then
+            playerESP[player].Highlight:Destroy()
+        end
+        playerESP[player] = nil
+    end
+end
+
+local function playerAdded(p)
+    if p == LocalPlayer then return end
+
+    if not playerESP[p] then
+        playerESP[p] = {}
+        local highlight = createHighlight(p)
+
+        local function characterAdded(cr)
+            if highlight and cr then
+                highlight.Parent = cr
+                highlight.Enabled = default.highlight.enable
+
+                esp(p, cr)
+                updateBoxESP(p)
+            end
+        end
+
+        if p.Character then
+            characterAdded(p.Character)
+        end
+
+        p.CharacterAdded:Connect(characterAdded)
+    end
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        playerAdded(p)
+    end
+end
+
+Players.PlayerAdded:Connect(playerAdded)
+Players.PlayerRemoving:Connect(playerRemoved)
+RunService.RenderStepped:Connect(drawSkeleton)
+RunService.RenderStepped:Connect(function()
+    for player, _ in pairs(playerESP) do
+        if player and player.Character then
+            updateHighlightESP(player)
+        end
+    end
+end)
+
+-- Movement: WalkSpeed and JumpPower Configuration
+local MovementConfig = {
+    WalkSpeed = 16,
+    JumpPower = 50
+}
+
+local function UpdateWalkSpeed()
+    local Humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+    if Humanoid then
+        Humanoid.WalkSpeed = MovementConfig.WalkSpeed
+        if walkspeedConnection then
+            walkspeedConnection:Disconnect()
+        end
+        walkspeedConnection = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+            Humanoid.WalkSpeed = MovementConfig.WalkSpeed
+        end)
+    end
+end
+
+local function UpdateJumpPower()
+    local Humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid")
+    if Humanoid then
+        Humanoid.JumpPower = MovementConfig.JumpPower
+        if jumpPowerConnection then
+            jumpPowerConnection:Disconnect()
+        end
+        jumpPowerConnection = Humanoid:GetPropertyChangedSignal("JumpPower"):Connect(function()
+            Humanoid.JumpPower = MovementConfig.JumpPower
+        end)
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    UpdateWalkSpeed()
+    UpdateJumpPower()
+end)
+
+if LocalPlayer.Character then
+    UpdateWalkSpeed()
+    UpdateJumpPower()
+end
+
+-- Rapid Fire: Configuration and Logic
+getgenv().config = {
+    enable = false,
+    delay = 0
+}
+
+local utility = {}
+
+utility.get_gun = function()
+    local Character = LocalPlayer.Character
+    if Character then
+        for _, tool in next, Character:GetChildren() do
+            if tool:IsA("Tool") and tool:FindFirstChild("Ammo") then
+                return tool
+            end
+        end
+    end
+    return nil
+end
+
+utility.rapid = function(tool)
+    if tool and tool.Parent then
+        tool:Activate()
+    end
+end
+
+getgenv().is_firing = false
+
+local function SetupRapidFireInput()
+    if rapidFireInputBeganConnection then
+        rapidFireInputBeganConnection:Disconnect()
+        rapidFireInputBeganConnection = nil
+    end
+    if rapidFireInputEndedConnection then
+        rapidFireInputEndedConnection:Disconnect()
+        rapidFireInputEndedConnection = nil
+    end
+
+    rapidFireInputBeganConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or not config.enable then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local gun = utility.get_gun()
+            if gun and not is_firing then
+                is_firing = true
+                while is_firing do
+                    utility.rapid(gun)
+                    task.wait(config.delay)
+                end
+            end
+        end
+    end)
+
+    rapidFireInputEndedConnection = UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            is_firing = false
+        end
+    end)
+end
+
+SetupRapidFireInput()
+
+-- UI Setup
+local Window = Library:CreateWindow({
+    Title = 'banto.wtf',
+    Center = true,
+    AutoShow = true,
+    TabPadding = 8,
+    MenuFadeTime = 0.2
+})
+
+local Tabs = {
+    Aim = Window:AddTab('Aim'),
+    Visuals = Window:AddTab('Visuals'),
+    Movement = Window:AddTab('Movement'),
+    Misc = Window:AddTab('Misc'),
+    Settings = Window:AddTab('Settings'),
+}
+
+-- Silent Aim Section (Left)
+local SilentAimGroupBox = Tabs.Aim:AddLeftGroupbox('Silent Aim')
+
+SilentAimGroupBox:AddToggle('SilentAimToggle', {
+    Text = 'Enable Silent Aim',
+    Default = salvia_dev.Enabled,
+    Tooltip = 'Toggles Silent Aim functionality',
+    Callback = function(Value)
+        salvia_dev.Enabled = Value
+        print('[cb] Silent Aim toggled:', Value)
+    end
+})
+
+SilentAimGroupBox:AddSlider('PredictionX', {
+    Text = 'Prediction X',
+    Default = salvia_dev.Prediction.X,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(Value)
+        salvia_dev.Prediction.X = Value
+        print('[cb] Silent Aim Prediction X changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddSlider('PredictionY', {
+    Text = 'Prediction Y',
+    Default = salvia_dev.Prediction.Y,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(Value)
+        salvia_dev.Prediction.Y = Value
+        print('[cb] Silent Aim Prediction Y changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddSlider('HitChance', {
+    Text = 'Hit Chance',
+    Default = salvia_dev.HitChance,
+    Min = 0,
+    Max = 100,
+    Rounding = 0,
+    Compact = false,
+    Callback = function(Value)
+        salvia_dev.HitChance = Value
+        print('[cb] Hit Chance changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddDropdown('HitPartMode', {
+    Values = {'Closest', 'Random', 'Specific'},
+    Default = 1,
+    Text = 'Hit Part Mode',
+    Tooltip = 'Select how to choose the target part',
+    Callback = function(Value)
+        salvia_dev.HitPartMode = Value
+        print('[cb] Hit Part Mode changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddDropdown('HitPart', {
+    Values = {'Head', 'HumanoidRootPart', 'Torso', 'UpperTorso', 'Left Arm', 'Right Arm', 'Left Leg', 'Right Leg'},
+    Default = 1,
+    Text = 'Hit Part',
+    Tooltip = 'Select specific part when mode is Specific',
+    Callback = function(Value)
+        salvia_dev.HitPart = Value
+        print('[cb] Hit Part changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddToggle('FOVVisible', {
+    Text = 'FOV Circle Visible',
+    Default = salvia_dev.FOV.Visible,
+    Tooltip = 'Toggles visibility of the FOV circle',
+    Callback = function(Value)
+        salvia_dev.FOV.Visible = Value
+        print('[cb] FOV Visibility toggled:', Value)
+    end
+})
+
+SilentAimGroupBox:AddSlider('FOVRadius', {
+    Text = 'FOV Radius',
+    Default = salvia_dev.FOV.Radius,
+    Min = 50,
+    Max = 1000,
+    Rounding = 0,
+    Compact = false,
+    Callback = function(Value)
+        salvia_dev.FOV.Radius = Value
+        FOVCircle.Radius = Value
+        print('[cb] FOV Radius changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddSlider('FOVTransparency', {
+    Text = 'FOV Transparency',
+    Default = salvia_dev.FOV.Transparency,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(Value)
+        salvia_dev.FOV.Transparency = Value
+        FOVCircle.Transparency = Value
+        print('[cb] FOV Transparency changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddLabel('FOV Color'):AddColorPicker('FOVColor', {
+    Default = salvia_dev.FOV.OutlineColor,
+    Title = 'FOV Circle Color',
+    Transparency = 0,
+    Callback = function(Value)
+        salvia_dev.FOV.OutlineColor = Value
+        FOVCircle.Color = Value
+        print('[cb] FOV Color changed:', Value)
+    end
+})
+
+SilentAimGroupBox:AddToggle('KnifeCheck', {
+    Text = 'Knife Check',
+    Default = salvia_dev.KnifeCheck,
+    Tooltip = 'Disables Silent Aim when holding a knife',
+    Callback = function(Value)
+        salvia_dev.KnifeCheck = Value
+        print('[cb] Knife Check toggled:', Value)
+    end
+})
+
+SilentAimGroupBox:AddToggle('HealthCheck', {
+    Text = 'Health Check',
+    Default = salvia_dev.HealthCheck,
+    Tooltip = 'Only targets players with health above 0',
+    Callback = function(Value)
+        salvia_dev.HealthCheck = Value
+        print('[cb] Health Check toggled:', Value)
+    end
+})
+
+-- Camlock Section (Right)
+local CamlockGroupBox = Tabs.Aim:AddRightGroupbox('Camlock')
+
+CamlockGroupBox:AddToggle('CamlockToggle', {
+    Text = 'Enable Camlock',
+    Default = CONFIG.Enabled,
+    Tooltip = 'Toggles Camlock functionality',
+    Callback = function(Value)
+        CONFIG.Enabled = Value
+        if not Value then
+            lockOn = false
+            targetPlayer = nil
+            print("Camlock disabled")
+        end
+        print('[cb] Camlock toggled:', Value)
+    end
+})
+
+CamlockGroupBox:AddLabel('Lock Key'):AddKeyPicker('CamlockKeybind', {
+    Default = CONFIG.LockKey.Name,
+    Text = 'Lock Key',
+    Tooltip = 'Key to toggle lock-on',
+    Callback = function(Value)
+        if typeof(Value) == "EnumItem" and Value.EnumType == Enum.KeyCode then
+            CONFIG.LockKey = Value
+            SetupCamlockInput()
+            print('[cb] Camlock Keybind changed to:', Value.Name)
+        else
+            print('[cb] Invalid keybind value received:', Value)
+        end
+    end
+})
+
+CamlockGroupBox:AddSlider('CamlockPredictionX', {
+    Text = 'Prediction X',
+    Default = CONFIG.PredictionFactorX,
+    Min = 0,
+    Max = 0.2,
+    Rounding = 3,
+    Compact = false,
+    Callback = function(Value)
+        CONFIG.PredictionFactorX = Value
+        print('[cb] Camlock Prediction X changed:', Value)
+    end
+})
+
+CamlockGroupBox:AddSlider('CamlockPredictionY', {
+    Text = 'Prediction Y',
+    Default = CONFIG.PredictionFactorY,
+    Min = 0,
+    Max = 0.2,
+    Rounding = 3,
+    Compact = false,
+    Callback = function(Value)
+        CONFIG.PredictionFactorY = Value
+        print('[cb] Camlock Prediction Y changed:', Value)
+    end
+})
+
+CamlockGroupBox:AddSlider('SmoothingFactor', {
+    Text = 'Smoothing',
+    Default = CONFIG.SmoothingFactor,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(Value)
+        CONFIG.SmoothingFactor = Value
+        print('[cb] Smoothing Factor changed:', Value)
+    end
+})
+
+CamlockGroupBox:AddDropdown('CamlockHitPart', {
+    Values = {'Head', 'HumanoidRootPart', 'Torso', 'UpperTorso'},
+    Default = 2,
+    Text = 'Aim Part',
+    Tooltip = 'Select the target part for Camlock',
+    Callback = function(Value)
+        CONFIG.DefaultHitPart = Value
+        hitPartName = Value
+        print('[cb] Camlock Aim Part changed:', Value)
+    end
+})
+
+-- Visuals Section (Left)
+local VisualsGroupBox = Tabs.Visuals:AddLeftGroupbox('Enemy')
+
+VisualsGroupBox:AddToggle('ESP2DBox', {
+    Text = 'Enable 2D Box',
+    Default = default["2dbox"].enable,
+    Tooltip = 'Toggles 2D box visuals',
+    Callback = function(Value)
+        default["2dbox"].enable = Value
+        print('[cb] 2D Box Visuals toggled:', Value)
+    end
+})
+
+VisualsGroupBox:AddLabel('2D Box Color'):AddColorPicker('ESP2DBoxColor', {
+    Default = default["2dbox"].color,
+    Title = '2D Box Color',
+    Transparency = 0,
+    Callback = function(Value)
+        default["2dbox"].color = Value
+        print('[cb] 2D Box Color changed:', Value)
+    end
+})
+
+VisualsGroupBox:AddToggle('ESPName', {
+    Text = 'Enable Name',
+    Default = default.name.enable,
+    Tooltip = 'Toggles name visuals',
+    Callback = function(Value)
+        default.name.enable = Value
+        print('[cb] Name Visuals toggled:', Value)
+    end
+})
+
+VisualsGroupBox:AddToggle('ESPHighlight', {
+    Text = 'Enable Highlight',
+    Default = default.highlight.enable,
+    Tooltip = 'Toggles highlight visuals',
+    Callback = function(Value)
+        default.highlight.enable = Value
+        print('[cb] Highlight Visuals toggled:', Value)
+    end
+})
+
+VisualsGroupBox:AddLabel('Highlight Color'):AddColorPicker('ESPHighlightColor', {
+    Default = default.highlight.fillColor,
+    Title = 'Highlight Color',
+    Transparency = 0,
+    Callback = function(Value)
+        default.highlight.fillColor = Value
+        print('[cb] Highlight Color changed:', Value)
+    end
+})
+
+VisualsGroupBox:AddLabel('Highlight Outline Color'):AddColorPicker('ESPHighlightOutlineColor', {
+    Default = default.highlight.outlineColor,
+    Title = 'Highlight Outline Color',
+    Transparency = 0,
+    Callback = function(Value)
+        default.highlight.outlineColor = Value
+        print('[cb] Highlight Outline Color changed:', Value)
+    end
+})
+
+-- Movement Section (Left)
+local MovementGroupBox = Tabs.Movement:AddLeftGroupbox('Player')
+
+MovementGroupBox:AddSlider('WalkSpeedValue', {
+    Text = 'WalkSpeed',
+    Default = MovementConfig.WalkSpeed,
+    Min = 16,
+    Max = 200,
+    Rounding = 0,
+    Compact = false,
+    Callback = function(Value)
+        MovementConfig.WalkSpeed = Value
+        UpdateWalkSpeed()
+        print('[cb] WalkSpeed changed:', Value)
+    end
+})
+
+MovementGroupBox:AddSlider('JumpPowerValue', {
+    Text = 'JumpPower',
+    Default = MovementConfig.JumpPower,
+    Min = 50,
+    Max = 200,
+    Rounding = 0,
+    Compact = false,
+    Callback = function(Value)
+        MovementConfig.JumpPower = Value
+        UpdateJumpPower()
+        print('[cb] JumpPower changed:', Value)
+    end
+})
+
+-- Misc Section (Left)
+local MiscGroupBox = Tabs.Misc:AddLeftGroupbox('Weapon')
+
+MiscGroupBox:AddToggle('RapidFireToggle', {
+    Text = 'Enable Rapid Fire',
+    Default = config.enable,
+    Tooltip = 'Toggles rapid fire functionality',
+    Callback = function(Value)
+        config.enable = Value
+        is_firing = false -- Reset firing state when toggled
+        SetupRapidFireInput()
+        print('[cb] Rapid Fire toggled:', Value)
+    end
+})
+
+MiscGroupBox:AddSlider('RapidFireDelay', {
+    Text = 'Fire Delay',
+    Default = config.delay,
+    Min = 0,
+    Max = 0.5,
+    Rounding = 3,
+    Compact = false,
+    Callback = function(Value)
+        config.delay = Value
+        print('[cb] Rapid Fire Delay changed:', Value)
+    end
+})
+
+-- Settings Tab
+local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
+MenuGroup:AddButton('Unload', function() Library:Unload() end)
+MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'RightControl', NoUI = true, Text = 'Menu keybind' })
+
+Library:OnUnload(function()
+    fullCleanup()
+    print('Unloaded!')
+    Library.Unloaded = true
+end)
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
+
+ThemeManager:SetFolder('banto.wtf')
+SaveManager:SetFolder('banto.wtf/saved')
+
+SaveManager:BuildConfigSection(Tabs.Settings)
+ThemeManager:ApplyToTab(Tabs.Settings)
+
+SaveManager:LoadAutoloadConfig()
